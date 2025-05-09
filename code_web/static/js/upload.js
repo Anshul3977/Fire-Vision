@@ -1,61 +1,26 @@
-$(document).ready(function () {
-  $("#uploadBtn").on("click", function (event) {
-    event.preventDefault();
-    var formData = new FormData(document.getElementById("uploadForm"));
-
-    $("#stableFrames").attr("src", "");
-    $("#yoloFrames").attr("src", "");
-    $("#fireAnalysis").attr("src", "");
-
-    $.ajax({
-      url: "/upload",
-      type: "POST",
-      data: formData,
-      contentType: false,
-      processData: false,
-      success: function (response) {
-        if (response.error) {
-          $("#logs").innerText = response.error;
-        } else {
-          $("#logs").innerText = response.result;
-        }
-        // Is there any better way of refreshing the socket connection!
-        // setTimeout(function () {
-        //   location.reload();
-        // }, 2000);
-      },
-      error: function () {
-        $("#logs").innerText = "Error uploading video. Please try again.";
-
-        // Is there any better way of refreshing the socket connection!
-        // setTimeout(function () {
-        //   location.reload();
-        // }, 2000);
-      },
+$(document).ready(function() {
+    $('#uploadBtn').click(function() {
+        var formData = new FormData($('#uploadForm')[0]);
+        $.ajax({
+            url: '/upload',
+            type: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            success: function(response) {
+                console.log('Upload successful:', response);
+                $('#logs').text('Video processing started...');
+            },
+            error: function(error) {
+                console.log('Upload error:', error);
+                $('#logs').text('Error uploading video.');
+            }
+        });
     });
-  });
 
-  var socket = io.connect();
-
-  $("#stopBtn").on("click", function (event) {
-    event.preventDefault();
-    socket.emit("stop_processing");
-
-    // Is there any better way of refreshing the socket connection!
-    // setTimeout(function () {
-    //   location.reload();
-    // }, 2000);
-  });
-
-  socket.on("stable_update", function (data) {
-    $("#stableFrames").attr("src", "data:image/png;base64," + data);
-  });
-
-  socket.on("yolo_update", function (data) {
-    $("#yoloFrames").attr("src", "data:image/png;base64," + data);
-  });
-
-  socket.on("analysis", function (data) {
-    $("#fireAnalysis").attr("src", "data:image/png;base64," + data);
-  });
+    $('#stopBtn').click(function() {
+        socket.emit('stop_processing');
+        console.log('Stop processing triggered');
+        $('#logs').text('Processing stopped.');
+    });
 });

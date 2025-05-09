@@ -1,39 +1,3 @@
-<!-- <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Forest Fire Management Research</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='/css/styles.css') }}">
-</head>
-<body>
-    <header>
-        <h1>Forest Fire and Smoke Research</h1>
-        <nav>
-            <ul>
-                <li><a href="/">Home</a></li>
-                <li><a href="/upload">Wildfire</a></li>
-                <li><a href="/models">Model</a></li>
-            </ul>
-        </nav>
-    </header>
-    <main class="container">
-        <section class="card" onclick="window.location.href='/upload'">
-            <h2>Wildfire Management System</h2>
-            <p>Upload and analyze videos to detect forest fire and smoke.</p>
-        </section>
-        <section class="card" onclick="window.location.href='/models'">
-            <h2>Model Metrics</h2>
-            <p>View and sort model performance metrics.</p>
-        </section>
-    </main>
-    <footer>
-        <p>&copy; 2024 Forest Fire Management Research. All rights reserved.</p>
-    </footer>
-</body>
-</html> -->
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -47,7 +11,7 @@
     <header>
         <div class="header-content">
             <h1>Forest Fire Detection System</h1>
-            <p class="subtitle">Advanced AI-Powered Fire and Smoke Analysis</p>
+            <p class="subtitle"></p>
         </div>
     </header>
 
@@ -99,15 +63,21 @@
                     <div class="video-box motion-analysis">
                         <h3>Motion Analysis</h3>
                         <div class="video-container">
-                            <img id="stableFrames" alt="Motion Analysis">
+                            <img id="stableFrames" alt="Motion Analysis" style="max-width: 100%; height: auto;">
                         </div>
                     </div>
                     <div class="video-box fire-analysis">
                         <h3>Fire Analysis</h3>
                         <div class="video-container">
-                            <img id="fireAnalysis" alt="Fire Analysis">
+                            <img id="fireAnalysis" alt="Fire Analysis" style="max-width: 100%; height: auto;">
                         </div>
                     </div>
+                </div>
+                <div class="analysis-data">
+                    <h3>Real-Time Analysis Data</h3>
+                    <img id="analysis_graph" src="" alt="Analysis Graph" style="max-width: 100%; height: auto;">
+                    <p>Total Area Burned: <span id="total_area">0</span> pixel units</p>
+                    <p>Area Increase: <span id="area_increase">0</span> pixel units</p>
                 </div>
             </div>
         </div>
@@ -115,17 +85,61 @@
 
     <footer>
         <div class="footer-content">
-            <p>&copy; 2024 Forest Fire Management Research. All rights reserved.</p>
+            <p>© 2024 Forest Fire Management Research. All rights reserved.</p>
         </div>
     </footer>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
     <script src="{{ url_for('static', filename='/js/upload.js') }}"></script>
+    <script>
+        const socket = io();
+
+        // Update video frame for motion analysis
+        socket.on('stable_update', function(data) {
+            console.log('Received stable_update event');
+            const stableFrames = document.getElementById('stableFrames');
+            if (stableFrames) {
+                stableFrames.src = 'data:image/jpeg;base64,' + data;
+            } else {
+                console.error('stableFrames element not found');
+            }
+        });
+
+        // Update dynamic graph and numerical data
+        socket.on('analysis_update', function(data) {
+            console.log('Received analysis_update event:', data);
+            const graphElement = document.getElementById('analysis_graph');
+            const totalAreaElement = document.getElementById('total_area');
+            const areaIncreaseElement = document.getElementById('area_increase');
+
+            if (graphElement && totalAreaElement && areaIncreaseElement) {
+                graphElement.src = 'data:image/png;base64,' + data.graph;
+                totalAreaElement.innerText = data.total_area.toFixed(2);
+                areaIncreaseElement.innerText = data.area_increase.toFixed(2);
+            } else {
+                console.error('DOM elements not found:', {
+                    graphElement: !!graphElement,
+                    totalAreaElement: !!totalAreaElement,
+                    areaIncreaseElement: !!areaIncreaseElement
+                });
+            }
+        });
+
+        // Final summary
+        socket.on('analysis_final', function(data) {
+            console.log('Received analysis_final event:', data);
+            const graphElement = document.getElementById('analysis_graph');
+            const totalAreaElement = document.getElementById('total_area');
+
+            if (graphElement && totalAreaElement) {
+                graphElement.src = 'data:image/png;base64,' + data.graph;
+                totalAreaElement.innerText = data.total_area.toFixed(2);
+                alert('Video processing complete. Total area burned: ' + data.total_area.toFixed(2) + ' pixel units');
+            } else {
+                console.error('DOM elements not found for final update');
+            }
+        });
+    </script>
 </body>
 </html>
-
-
-
-
-
