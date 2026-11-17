@@ -25,3 +25,8 @@ ENV/
 .DS_Store
 .idea/
 .vscode/
+
+# Test and lint caches
+.ruff_cache/
+htmlcov/
+.coverage

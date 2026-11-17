@@ -1,0 +1,21 @@
+Fire-Vision inference weights
+
+The file models/yoloNano.pt is a YOLOv8-OBB nano checkpoint trained with the
+Ultralytics library (the checkpoint records yolov8n-obb.yaml and a single
+class name, "fire"). Ultralytics is licensed under the GNU Affero General
+Public License v3.0. Ultralytics treats models trained with that package as
+AGPL-3.0 as well.
+
+models/yoloNano.onnx is an ONNX export of that same checkpoint at a 320 pixel
+input. It is a derived artifact of those weights and is distributed with this
+source tree so the public demo does not have to download them.
+
+This repository does not import the Ultralytics package at runtime. The web
+service runs the ONNX graph with ONNX Runtime, which is MIT licensed. The
+weights themselves should still be treated as AGPL-3.0. This public repository
+is the corresponding source for the demo.
+
+The other checkpoints (yoloSmall.pt, yoloFire.pt) are the author's additional
+training artifacts and are not loaded by the free-tier service.
+
+This note is not legal advice.

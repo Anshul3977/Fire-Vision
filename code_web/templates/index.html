@@ -3,47 +3,77 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fire Detection - Forest Fire Management Research</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='/css/styles.css') }}">
+    <title>Fire-Vision — Forest Fire Detection</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
 </head>
 <body>
     <header>
         <div class="header-content">
             <h1>Forest Fire Detection System</h1>
-            <p class="subtitle"></p>
+            <p class="subtitle">YOLOv8-OBB fire boxes, color segmentation, and optical-flow spread tracking</p>
+            <nav class="nav-links">
+                <a href="/">Analyze</a>
+                <a href="/models">Model comparison</a>
+            </nav>
         </div>
     </header>
 
     <main class="container">
         <div class="content-wrapper">
+            <div class="demo-banner">
+                <strong>Live demo on Render’s free instance.</strong>
+                <span id="alertMode">Alerts stay in demo mode unless Twilio env vars are set.</span>
+                The service sleeps after 15 minutes and takes about a minute to wake.
+                <span id="limits"></span>
+            </div>
+
             <div class="form-section">
-                <h2>Upload Video for Analysis</h2>
+                <h2>Run a clip</h2>
+                <div class="sample-row">
+                    <video id="samplePreview" src="/media/sample" controls muted playsinline preload="metadata"></video>
+                    <div>
+                        <p>
+                            Bundled sample: a 6.7 second forest-fire line in Pauri Garhwal,
+                            CC BY-SA 4.0 by RachnaChaudhary1 (Wikimedia Commons).
+                            One click runs YOLO and the motion panels on it.
+                        </p>
+                        <button type="button" id="sampleBtn" class="sample-btn">Run bundled sample</button>
+                    </div>
+                </div>
+
                 <form id="uploadForm" enctype="multipart/form-data">
                     <div class="form-group">
-                        <label for="video">Upload Video:</label>
-                        <input type="file" id="video" name="video" accept="video/*" />
+                        <label for="video">Or upload a short video (MP4 or WebM):</label>
+                        <input type="file" id="video" name="video" accept="video/mp4,video/webm,video/quicktime" />
                     </div>
 
                     <div class="form-group">
-                        <label for="sizeFactor">Resize Video (Width: 600-800 preferred):</label>
-                        <input type="number" id="sizeFactor" name="sizeFactor" value="1" min="0.1" max="2" step="0.1">
+                        <label for="sizeFactor">Downscale divisor (2 halves the frame; 1 keeps it, then the server caps the long edge):</label>
+                        <input type="number" id="sizeFactor" name="sizeFactor" value="1" min="0.5" max="2" step="0.1">
                     </div>
 
                     <div class="form-group">
-                        <label for="nFrames">Frames for Smoke Direction Analysis:</label>
+                        <label for="nFrames">Frames for smoke direction analysis:</label>
                         <input type="number" id="nFrames" name="nFrames" value="30" min="0" max="300" step="10">
                     </div>
 
                     <div class="form-group">
-                        <label for="mFrames">Frames for Fire Spread Analysis:</label>
+                        <label for="mFrames">Frames for fire spread analysis:</label>
                         <input type="number" id="mFrames" name="mFrames" value="180" min="0" max="300" step="10">
                     </div>
 
                     <div class="form-group checkbox-group">
                         <label>
                             <input type="checkbox" id="cameraStable" name="cameraStable">
-                            Is the camera stable? *(For fire & smoke direction analysis)
+                            Camera is stable (fire area and smoke direction)
+                        </label>
+                    </div>
+
+                    <div class="form-group checkbox-group">
+                        <label>
+                            <input type="checkbox" id="runYolo" name="runYolo">
+                            Run YOLOv8-OBB fire detector
                         </label>
                     </div>
 
@@ -56,28 +86,29 @@
 
             <div id="videoFrames" class="analysis-section">
                 <div class="logs-container">
-                    <p id="logs"></p>
+                    <p id="logs">Waiting for a clip.</p>
                 </div>
-                
+
                 <div class="video-section">
                     <div class="video-box motion-analysis">
-                        <h3>Motion Analysis</h3>
+                        <h3>Motion analysis</h3>
+                        <p class="panel-note">Original frame, fire mask, smoke mask, spread overlay.</p>
                         <div class="video-container">
-                            <img id="stableFrames" alt="Motion Analysis" style="max-width: 100%; height: auto;">
+                            <img id="stableFrames" alt="Motion analysis" style="max-width: 100%; height: auto;">
                         </div>
                     </div>
                     <div class="video-box fire-analysis">
-                        <h3>Fire Analysis</h3>
+                        <h3>YOLO fire boxes</h3>
                         <div class="video-container">
-                            <img id="fireAnalysis" alt="Fire Analysis" style="max-width: 100%; height: auto;">
+                            <img id="fireAnalysis" alt="YOLO fire detections" style="max-width: 100%; height: auto;">
                         </div>
                     </div>
                 </div>
                 <div class="analysis-data">
-                    <h3>Real-Time Analysis Data</h3>
-                    <img id="analysis_graph" src="" alt="Analysis Graph" style="max-width: 100%; height: auto;">
-                    <p>Total Area Burned: <span id="total_area">0</span> pixel units</p>
-                    <p>Area Increase: <span id="area_increase">0</span> pixel units</p>
+                    <h3>Real-time analysis</h3>
+                    <img id="analysis_graph" src="" alt="Analysis graph" style="max-width: 100%; height: auto;">
+                    <p>Total area burned: <span id="total_area">0</span> pixel units</p>
+                    <p>Area increase: <span id="area_increase">0</span> pixel units</p>
                 </div>
             </div>
         </div>
@@ -85,61 +116,12 @@
 
     <footer>
         <div class="footer-content">
-            <p>© 2024 Forest Fire Management Research. All rights reserved.</p>
+            <p>Fire-Vision · Anshul Palarpwar · forest fire detection demo</p>
         </div>
     </footer>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='/js/upload.js') }}"></script>
-    <script>
-        const socket = io();
-
-        // Update video frame for motion analysis
-        socket.on('stable_update', function(data) {
-            console.log('Received stable_update event');
-            const stableFrames = document.getElementById('stableFrames');
-            if (stableFrames) {
-                stableFrames.src = 'data:image/jpeg;base64,' + data;
-            } else {
-                console.error('stableFrames element not found');
-            }
-        });
-
-        // Update dynamic graph and numerical data
-        socket.on('analysis_update', function(data) {
-            console.log('Received analysis_update event:', data);
-            const graphElement = document.getElementById('analysis_graph');
-            const totalAreaElement = document.getElementById('total_area');
-            const areaIncreaseElement = document.getElementById('area_increase');
-
-            if (graphElement && totalAreaElement && areaIncreaseElement) {
-                graphElement.src = 'data:image/png;base64,' + data.graph;
-                totalAreaElement.innerText = data.total_area.toFixed(2);
-                areaIncreaseElement.innerText = data.area_increase.toFixed(2);
-            } else {
-                console.error('DOM elements not found:', {
-                    graphElement: !!graphElement,
-                    totalAreaElement: !!totalAreaElement,
-                    areaIncreaseElement: !!areaIncreaseElement
-                });
-            }
-        });
-
-        // Final summary
-        socket.on('analysis_final', function(data) {
-            console.log('Received analysis_final event:', data);
-            const graphElement = document.getElementById('analysis_graph');
-            const totalAreaElement = document.getElementById('total_area');
-
-            if (graphElement && totalAreaElement) {
-                graphElement.src = 'data:image/png;base64,' + data.graph;
-                totalAreaElement.innerText = data.total_area.toFixed(2);
-                alert('Video processing complete. Total area burned: ' + data.total_area.toFixed(2) + ' pixel units');
-            } else {
-                console.error('DOM elements not found for final update');
-            }
-        });
-    </script>
+    <script src="{{ url_for('static', filename='js/upload.js') }}"></script>
 </body>
 </html>

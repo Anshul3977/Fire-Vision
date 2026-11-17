@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff==0.7.4
+      - run: ruff check code_web tests
+      - run: ruff format --check code_web tests
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t fire-vision:ci .
+      - name: Image starts and /health stays light
+        run: |
+          docker run -d --name fire-vision -p 7860:7860 -e PORT=7860 fire-vision:ci
+          for _ in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:7860/health -o /tmp/health.json; then
+              python -c 'import json; d=json.load(open("/tmp/health.json")); assert d["status"]=="ok" and d["model_present"] is True and d["alerts"]=="demo"'
+              curl -sf -o /dev/null http://127.0.0.1:7860/
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs fire-vision
+          exit 1

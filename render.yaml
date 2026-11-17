@@ -1,0 +1,43 @@
+# One free Docker web service in Singapore.
+# Render injects PORT. Twilio stays unset until the dashboard fills the secrets.
+services:
+  - type: web
+    name: fire-vision
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: FRAME_STRIDE
+        value: "4"
+      - key: YOLO_IMGSZ
+        value: "320"
+      - key: MAX_EDGE
+        value: "480"
+      - key: MAX_UPLOAD_BYTES
+        value: "8388608"
+      - key: MAX_DURATION_SEC
+        value: "15"
+      - key: MAX_PROCESS_SEC
+        value: "150"
+      - key: MAX_VIDEO_FRAMES
+        value: "450"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE
+        sync: false
+      - key: ALERT_PHONE
+        sync: false

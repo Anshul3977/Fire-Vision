@@ -1,316 +1,238 @@
+"""Fire-Vision web app.
+
+Listens on 0.0.0.0:$PORT. Render's proxy terminates TLS and forwards
+WebSocket upgrades; ProxyFix trusts that one hop so Socket.IO sees https.
+"""
+
+from __future__ import annotations
+
+import logging
 import os
-import cv2
-import math
-import numpy as np
-import base64
-from threading import Thread
-from flask_socketio import SocketIO, emit
-from flask import Flask, render_template, request, jsonify
-from fire_flow import fire_pixel_segmentation, fire_flow
-from smoke_flow import smoke_pixel_segmentation, smoke_flow
-from yolo_detection import run_yolo, load_model
-from analysis import graph
-from twilio.rest import Client
+import uuid
+from pathlib import Path
 
-# Twilio Credentials (Stored as Environment Variables for Security)
-ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE = os.getenv("TWILIO_PHONE")
-ALERT_PHONE = os.getenv("ALERT_PHONE")
+from flask import Flask, current_app, jsonify, render_template, request, send_file
+from flask_socketio import SocketIO
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.utils import secure_filename
 
-app = Flask(__name__)
-socketio = SocketIO(app)
+import config
+from alerts import AlertGate, AlertSender, twilio_configured
 
-load_model()
+logger = logging.getLogger("firevision")
+socketio = SocketIO()
 
-UPLOAD_FOLDER = 'static/uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-threads = True
-size_factor = 1
-mFrames = 180
-nFrames = 30
-alert_triggered = False  # Prevent multiple alerts in one session
-
-def send_sms_alert(fire_detected, smoke_detected):
-    """Sends an SMS alert via Twilio when fire or smoke is detected."""
-    global alert_triggered
-    if alert_triggered:
-        return
-
-    client = Client(ACCOUNT_SID, AUTH_TOKEN)
-    message_body = "🔥 FIRE/SMOKE ALERT! 🔥\n"
-    if fire_detected:
-        message_body += "🚨 Fire detected and spreading!\n"
-    if smoke_detected:
-        message_body += "⚠️ Smoke detected, moving in a dangerous direction!\n"
-
+def _form_int(value, default, lo, hi) -> int:
     try:
-        message = client.messages.create(
-            body=message_body,
-            from_=TWILIO_PHONE,
-            to=ALERT_PHONE
+        number = int(float(value))
+    except (TypeError, ValueError):
+        number = default
+    return max(lo, min(hi, number))
+
+
+def _form_bool(value) -> bool:
+    return str(value).lower() in {"on", "true", "1", "yes"}
+
+
+def _emit(event, data):
+    socketio.emit(event, data)
+
+
+def request_stop():
+    current_app.extensions["runner"].request_stop()
+    socketio.emit("status", "Stopping after the current frame.")
+
+
+def create_app(testing: bool = False) -> Flask:
+    app = Flask(__name__)
+    app.config["TESTING"] = testing
+    # A few KB of multipart overhead, then Flask rejects the body itself.
+    app.config["MAX_CONTENT_LENGTH"] = config.max_upload_bytes() + 8 * 1024
+    socketio.init_app(
+        app,
+        async_mode="threading",
+        cors_allowed_origins="*",
+        ping_timeout=60,
+        ping_interval=25,
+    )
+    # Outermost, so Render's X-Forwarded-Proto is applied before Socket.IO.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+    if not getattr(socketio, "_firevision_handlers", False):
+        socketio.on_event("stop_processing", request_stop)
+        socketio._firevision_handlers = True
+
+    from jobs import Runner
+
+    runner = Runner()
+    gate = AlertGate(AlertSender())
+    app.extensions["runner"] = runner
+    app.extensions["gate"] = gate
+
+    def enqueue(target, kwargs) -> bool:
+        if not runner.try_start():
+            return False
+
+        def wrapped():
+            try:
+                gate.reset()
+                target(**kwargs)
+            except Exception:
+                logger.exception("video processing failed")
+                _emit("status", "Processing failed before the clip finished.")
+            finally:
+                runner.finish()
+
+        if app.config.get("TESTING"):
+            app.config.setdefault("JOBS", []).append(wrapped)
+            return True
+        socketio.start_background_task(wrapped)
+        return True
+
+    @app.errorhandler(413)
+    def too_large(_error):
+        limit_mb = config.max_upload_bytes() // (1024 * 1024)
+        return jsonify(error=f"Video must be under {limit_mb} MB."), 413
+
+    @app.get("/health")
+    def health():
+        return jsonify(
+            status="ok",
+            alerts="twilio" if twilio_configured() else "demo",
+            model=config.MODEL_PATH.name,
+            model_present=config.MODEL_PATH.is_file(),
+            frame_stride=config.frame_stride(),
+            yolo_imgsz=config.yolo_imgsz(),
+            max_edge=config.max_edge(),
+            max_upload_mb=config.max_upload_bytes() / (1024 * 1024),
+            max_duration_sec=config.max_duration_sec(),
+            max_process_sec=config.max_process_sec(),
+            sample=config.SAMPLE_PATH.name,
         )
-        print("SMS Alert Sent! Message SID:", message.sid)
-        alert_triggered = True  # Prevent duplicate alerts
-    except Exception as e:
-        print(f"Failed to send SMS alert: {e}")
 
-def make_call_alert():
-    """Makes an automated call via Twilio in case of fire or smoke detection."""
-    global alert_triggered
-    if alert_triggered:
-        return
+    @app.get("/")
+    def index():
+        return render_template("index.html")
 
-    client = Client(ACCOUNT_SID, AUTH_TOKEN)
+    @app.get("/upload")
+    def upload_page():
+        return render_template("index.html")
 
-    try:
-        call = client.calls.create(
-            twiml="<Response><Say>Warning! Fire or Smoke detected. Please take immediate action.</Say></Response>",
-            from_=TWILIO_PHONE,
-            to=ALERT_PHONE
+    @app.get("/models")
+    def models():
+        return render_template("models.html")
+
+    @app.get("/media/sample")
+    def sample_media():
+        path = config.SAMPLE_PATH
+        if not path.is_file():
+            return jsonify(error="Sample clip is not in this build."), 404
+        return send_file(path, mimetype="video/mp4", conditional=True, max_age=3600)
+
+    def _launch(video_path: Path, options: dict, delete_after: bool):
+        from processing import process_video
+
+        started = enqueue(
+            process_video,
+            {
+                "video_path": str(video_path),
+                "run_motion": options["run_motion"],
+                "run_yolo_detection": options["run_yolo"],
+                "size_factor": options["size_factor"],
+                "m_frames": options["m_frames"],
+                "n_frames": options["n_frames"],
+                "emit": _emit,
+                "runner": runner,
+                "gate": gate,
+                "delete_after": delete_after,
+            },
         )
-        print("Automated Call Triggered! Call SID:", call.sid)
-        alert_triggered = True  # Prevent duplicate alerts
-    except Exception as e:
-        print(f"Failed to make call alert: {e}")
+        if not started:
+            return jsonify(
+                error="A video is already processing. Stop it or wait for it to finish."
+            ), 409
+        return jsonify(
+            message="Processing started. Frames will show up as they finish.", result="started"
+        ), 202
 
-@socketio.on('stop_processing')
-def stop_stream():
-    global threads
-    threads = False
+    @app.post("/demo")
+    def demo():
+        path = config.SAMPLE_PATH
+        if not path.is_file():
+            return jsonify(error="Sample clip is missing."), 404
+        # Short windows so the 6.7s clip can show a spread arrow and a smoke mean.
+        return _launch(
+            path,
+            {
+                "run_motion": True,
+                "run_yolo": True,
+                "size_factor": 1,
+                "m_frames": 12,
+                "n_frames": 8,
+            },
+            delete_after=False,
+        )
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+    @app.post("/upload")
+    def handle_upload():
+        from processing import VideoRejected, validate_upload
 
-@app.route('/upload')
-def upload():
-    return render_template('upload.html')
+        if "video" not in request.files:
+            return jsonify(error="No video file uploaded"), 400
+        upload = request.files["video"]
+        original = secure_filename(upload.filename or "")
+        suffix = Path(original).suffix.lower()
+        if suffix not in config.ALLOWED_EXTENSIONS:
+            return jsonify(error="Upload an MP4, WebM, MOV, AVI, or MKV file."), 400
 
-@app.route('/models')
-def models():
-    return render_template('models.html')
+        run_motion = _form_bool(request.form.get("cameraStable"))
+        run_yolo = _form_bool(request.form.get("runYolo"))
+        if not run_motion and not run_yolo:
+            return jsonify(error="Turn on camera-stable analysis, YOLO, or both."), 400
 
-@app.route('/upload', methods=['POST'])
-def handle_upload():
-    if 'video' not in request.files:
-        return jsonify({'error': 'No video file uploaded'}), 400
-    
-    global threads, alert_triggered
-    threads = True
-    alert_triggered = False  # Reset alert status for new video
-    
-    video_file = request.files['video']
-    filename = video_file.filename
-    video_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    video_file.save(video_path)
+        config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        dest = config.UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
+        upload.save(dest)
+        try:
+            validate_upload(dest)
+        except VideoRejected as exc:
+            dest.unlink(missing_ok=True)
+            return jsonify(error=str(exc)), 400
 
-    global size_factor, mFrames, nFrames
-    size_factor = int(request.form.get('sizeFactor'))
-    mFrames = int(request.form.get('mFrames'))
-    nFrames = int(request.form.get('nFrames'))
-    
-    is_camera_stable = request.form.get('cameraStable') == 'on'
-    run_yolo_detection = request.form.get('runYolo') == 'on'
-    
-    if is_camera_stable and run_yolo_detection:
-        thread1 = Thread(target=process_stable_camera, args=(video_path,))
-        thread2 = Thread(target=process_yolo_detection, args=(video_path,))
-        thread1.start()
-        thread2.start()
-        thread1.join()
-        thread2.join()
-        os.unlink(video_path)
-        return jsonify({'result': "Video successfully processed"})
-    elif is_camera_stable:
-        process_stable_camera(video_path)
-        os.unlink(video_path)
-        return jsonify({'result': "Video successfully processed"})
-    elif run_yolo_detection:
-        process_yolo_detection(video_path)
-        os.unlink(video_path)
-        return jsonify({'result': "Video successfully processed"})
-    else:
-        os.unlink(video_path)
-        return jsonify({'error': 'Error processing video'})
+        options = {
+            "run_motion": run_motion,
+            "run_yolo": run_yolo,
+            "size_factor": request.form.get("sizeFactor", "1"),
+            "m_frames": _form_int(request.form.get("mFrames"), 180, 0, 300),
+            "n_frames": _form_int(request.form.get("nFrames"), 30, 0, 300),
+        }
+        try:
+            response = _launch(dest, options, delete_after=True)
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+        if response[1] != 202:
+            dest.unlink(missing_ok=True)
+        return response
 
-def process_stable_camera(video_path):
-    global size_factor
+    return app
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"Error: Could not open video file {video_path}")
-        return
 
-    fps = math.ceil(cap.get(cv2.CAP_PROP_FPS))
-    print(f"Video FPS: {fps}")
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    app = create_app()
+    port = int(os.environ.get("PORT", "5000"))
+    mode = "twilio" if twilio_configured() else "demo"
+    logger.info("listening on 0.0.0.0:%s alerts=%s", port, mode)
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        use_reloader=False,
+        allow_unsafe_werkzeug=True,
+    )
 
-    ret, first_frame = cap.read()
-    if not ret or first_frame is None:
-        print("Error: Could not read first frame of video.")
-        cap.release()
-        return
 
-    height, width = first_frame.shape[:2]
-    new_width = width // size_factor
-    new_height = height // size_factor
-    first_frame = cv2.resize(first_frame, (new_width, new_height))
-
-    # Fire Variables
-    areas = [0]
-    area_frame = np.zeros_like(first_frame)
-    fireX = []
-    fireY = []
-    path = []
-
-    # Smoke Variables
-    prev = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
-    wind_dir = []
-    smoke_dir = []
-
-    # Alert Variables
-    fire_detected = False
-    smoke_detected = False
-
-    frame_count = 0
-    last_graph_update = 0
-    graph_interval = fps * 5  # Update graph every 5 seconds
-
-    while cap.isOpened() and threads:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame_count += 1
-        im = cv2.resize(frame, (new_width, new_height))
-        processed_frame = im.copy()
-
-        # Fire and Smoke Processing
-        fire_mask = fire_pixel_segmentation(im)
-        area, new_area_frame, processed_frame, end_point = fire_flow(fire_mask, area_frame, fireX, fireY, processed_frame, mFrames)
-        area_frame = new_area_frame
-        if end_point is not None:
-            path.append(end_point)
-        areas.append(area)
-        if area > 0:  # Fire detection condition
-            fire_detected = True
-
-        smoke_mask = smoke_pixel_segmentation(im)
-        curr, processed_frame, smoke = smoke_flow(im, prev, smoke_mask, wind_dir, processed_frame, nFrames)
-        prev = curr
-        if smoke is not None:  # Smoke detection condition
-            smoke_detected = True
-            smoke_dir.append(smoke)
-
-        # Send Alerts if fire or smoke is detected
-        if (fire_detected or smoke_detected) and not alert_triggered:
-            send_sms_alert(fire_detected, smoke_detected)
-            make_call_alert()
-
-        # Overlay fire spread direction if enough points exist
-        if len(path) > 2:
-            start_point = path[0]
-            end_point = path[-1]
-            cv2.arrowedLine(processed_frame, start_point, end_point, (0, 255, 0), 2, tipLength=0.5)
-            delta_x = end_point[0] - start_point[0]
-            delta_y = end_point[1] - start_point[1]
-            angle_rad = np.arctan2(delta_y, delta_x)
-            angle_deg = np.degrees(angle_rad)
-            text_position = (start_point[0] + 10, start_point[1] - 10)
-            cv2.putText(processed_frame, f'Fire Spread Direction: {angle_deg:.2f}', text_position, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-
-        # Real-time frame emission
-        f_mask = cv2.cvtColor(fire_mask, cv2.COLOR_GRAY2BGR)
-        s_mask = cv2.cvtColor(smoke_mask, cv2.COLOR_GRAY2BGR)
-        row1 = np.hstack((im, f_mask))
-        row2 = np.hstack((s_mask, processed_frame))
-        final_frame = np.vstack((row1, row2))
-        _, buffer = cv2.imencode('.jpg', final_frame)
-        img_str = base64.b64encode(buffer).decode('utf-8')
-        socketio.emit('stable_update', img_str)
-
-        # Dynamic Graph and Numerical Data Update
-        if frame_count - last_graph_update >= graph_interval and len(areas) > 1:
-            points = list(set(path))  # Remove duplicates
-            frame_numbers = np.arange(len(areas))
-            time_seconds = frame_numbers / fps
-            graph_str = graph(time_seconds, areas, smoke_dir, points)
-            if graph_str is None:
-                print("Skipping graph update due to generation error")
-                continue
-
-            # Calculate numerical data
-            total_area = areas[-1]  # Latest cumulative area
-            area_increase = areas[-1] - areas[-2] if len(areas) > 2 else 0
-
-            # Log for debugging
-            print(f"Emitting analysis_update at frame {frame_count}: total_area={total_area}, area_increase={area_increase}")
-
-            # Emit graph and numerical data
-            socketio.emit('analysis_update', {
-                'graph': graph_str,
-                'total_area': total_area,
-                'area_increase': area_increase
-            })
-            last_graph_update = frame_count
-
-        if cv2.waitKey(1) & 0xFF == 27:
-            break
-
-    cap.release()
-
-    # Final Graph and Total Area at the End
-    if len(areas) > 1:
-        points = list(set(path))
-        frame_numbers = np.arange(len(areas))
-        time_seconds = frame_numbers / fps
-        final_graph_str = graph(time_seconds, areas, smoke_dir, points)
-        if final_graph_str is None:
-            print("Skipping final graph update due to generation error")
-            return
-
-        total_area = areas[-1]
-        print(f"Emitting analysis_final: total_area={total_area}")
-        socketio.emit('analysis_final', {
-            'graph': final_graph_str,
-            'total_area': total_area
-        })
-
-def process_yolo_detection(video_path):
-    cap = cv2.VideoCapture(video_path)
-
-    # Alert Variables
-    fire_detected = False
-    smoke_detected = False
-
-    while cap.isOpened() and threads:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        yolo_frame, pred_boxes, pred_classes = run_yolo(frame)
-
-        # Check YOLO predictions for fire/smoke (assuming class IDs: 0 for fire, 1 for smoke)
-        for cls in pred_classes:
-            if cls == 0:  # Fire
-                fire_detected = True
-            elif cls == 1:  # Smoke
-                smoke_detected = True
-
-        # Send Alerts if fire or smoke is detected
-        if (fire_detected or smoke_detected) and not alert_triggered:
-            send_sms_alert(fire_detected, smoke_detected)
-            make_call_alert()
-
-        _, buffer = cv2.imencode('.jpg', yolo_frame)
-        img_str = base64.b64encode(buffer).decode('utf-8')
-
-        socketio.emit('yolo_update', img_str)
-
-        if cv2.waitKey(1) & 0xFF == 27:
-            break
-
-    cap.release()
-
-if __name__ == '__main__':
-    socketio.run(app, debug=True)
+if __name__ == "__main__":
+    main()
