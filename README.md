@@ -92,6 +92,8 @@ Free-plan behavior that matters here: the instance sleeps after 15 minutes of no
 
 Hugging Face Docker Spaces on free CPU now require a paid upgrade, so this project does not ship a Space sync workflow.
 
+A Vercel project named `fire-vision` is already connected to this GitHub repo and is set to the FastAPI framework. This app is Flask, OpenCV, and a long-lived Socket.IO process, so `vercel.json` skips that build (`ignoreCommand` exits 0). Render is the live host.
+
 ### Environment variables
 
 | Variable | Required | Purpose |

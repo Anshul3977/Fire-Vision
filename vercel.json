@@ -1,0 +1,4 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "echo 'Fire-Vision runs on Render. This Vercel project is set to FastAPI and is not the deploy target.' && exit 0"
+}
