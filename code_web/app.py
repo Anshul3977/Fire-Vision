@@ -10,13 +10,10 @@ from fire_flow import fire_pixel_segmentation, fire_flow
 from smoke_flow import smoke_pixel_segmentation, smoke_flow
 from yolo_detection import run_yolo, load_model
 from analysis import graph
-from twilio.rest import Client
 
-# Twilio Credentials (Stored as Environment Variables for Security)
-ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE = os.getenv("TWILIO_PHONE")
-ALERT_PHONE = os.getenv("ALERT_PHONE")
+from alerts import AlertManager
+
+alerts = AlertManager()  # no-op unless all TWILIO_* env vars are set
 
 app = Flask(__name__)
 socketio = SocketIO(app)
@@ -30,51 +27,6 @@ threads = True
 size_factor = 1
 mFrames = 180
 nFrames = 30
-alert_triggered = False  # Prevent multiple alerts in one session
-
-def send_sms_alert(fire_detected, smoke_detected):
-    """Sends an SMS alert via Twilio when fire or smoke is detected."""
-    global alert_triggered
-    if alert_triggered:
-        return
-
-    client = Client(ACCOUNT_SID, AUTH_TOKEN)
-    message_body = "🔥 FIRE/SMOKE ALERT! 🔥\n"
-    if fire_detected:
-        message_body += "🚨 Fire detected and spreading!\n"
-    if smoke_detected:
-        message_body += "⚠️ Smoke detected, moving in a dangerous direction!\n"
-
-    try:
-        message = client.messages.create(
-            body=message_body,
-            from_=TWILIO_PHONE,
-            to=ALERT_PHONE
-        )
-        print("SMS Alert Sent! Message SID:", message.sid)
-        alert_triggered = True  # Prevent duplicate alerts
-    except Exception as e:
-        print(f"Failed to send SMS alert: {e}")
-
-def make_call_alert():
-    """Makes an automated call via Twilio in case of fire or smoke detection."""
-    global alert_triggered
-    if alert_triggered:
-        return
-
-    client = Client(ACCOUNT_SID, AUTH_TOKEN)
-
-    try:
-        call = client.calls.create(
-            twiml="<Response><Say>Warning! Fire or Smoke detected. Please take immediate action.</Say></Response>",
-            from_=TWILIO_PHONE,
-            to=ALERT_PHONE
-        )
-        print("Automated Call Triggered! Call SID:", call.sid)
-        alert_triggered = True  # Prevent duplicate alerts
-    except Exception as e:
-        print(f"Failed to make call alert: {e}")
-
 @socketio.on('stop_processing')
 def stop_stream():
     global threads
@@ -97,9 +49,9 @@ def handle_upload():
     if 'video' not in request.files:
         return jsonify({'error': 'No video file uploaded'}), 400
     
-    global threads, alert_triggered
+    global threads
     threads = True
-    alert_triggered = False  # Reset alert status for new video
+    alerts.reset()  # Reset alert status for new video
     
     video_file = request.files['video']
     filename = video_file.filename
@@ -203,9 +155,8 @@ def process_stable_camera(video_path):
             smoke_dir.append(smoke)
 
         # Send Alerts if fire or smoke is detected
-        if (fire_detected or smoke_detected) and not alert_triggered:
-            send_sms_alert(fire_detected, smoke_detected)
-            make_call_alert()
+        if fire_detected or smoke_detected:
+            alerts.alert(fire_detected, smoke_detected)
 
         # Overlay fire spread direction if enough points exist
         if len(path) > 2:
@@ -298,9 +249,8 @@ def process_yolo_detection(video_path):
                 smoke_detected = True
 
         # Send Alerts if fire or smoke is detected
-        if (fire_detected or smoke_detected) and not alert_triggered:
-            send_sms_alert(fire_detected, smoke_detected)
-            make_call_alert()
+        if fire_detected or smoke_detected:
+            alerts.alert(fire_detected, smoke_detected)
 
         _, buffer = cv2.imencode('.jpg', yolo_frame)
         img_str = base64.b64encode(buffer).decode('utf-8')
