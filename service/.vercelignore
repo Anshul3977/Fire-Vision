@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.pytest_cache
+.vercel
+tests
+benchmarks
+space
+training
+hf-space
+deploy_hf_space.py

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "index.py": { "memory": 2048, "maxDuration": 60, "includeFiles": "{firevision,models,public}/**" }
+  }
+}

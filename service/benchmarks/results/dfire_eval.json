@@ -1,0 +1,8 @@
+{
+  "model": "fire_smoke_dfire (YOLOv8n, imgsz 416)",
+  "split": "D-Fire test, 4,302 images (4 skipped by Ultralytics for out-of-bounds labels), 5,186 boxes",
+  "all":   {"precision": 0.643, "recall": 0.568, "mAP50": 0.611, "mAP50_95": 0.324},
+  "smoke": {"images": 2077, "boxes": 2311, "precision": 0.671, "recall": 0.638, "mAP50": 0.675, "mAP50_95": 0.381},
+  "fire":  {"images": 1113, "boxes": 2875, "precision": 0.614, "recall": 0.498, "mAP50": 0.547, "mAP50_95": 0.267},
+  "training": "8,000 random D-Fire train images (seed 0), COCO-pretrained yolov8n, 12 epochs, batch 16, CPU"
+}

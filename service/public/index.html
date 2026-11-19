@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fire-Vision · live fire detection demo</title>
+<meta name="description" content="Upload an image or a short clip and a YOLOv8-OBB fire detector (ONNX Runtime, CPU) marks the flames." />
+<style>
+  :root { --bg:#0b0d10; --panel:#13171c; --line:#232a33; --text:#e8ecf1; --muted:#8b96a5; --accent:#ff5a36; --ok:#3ecf8e; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:1080px; margin:0 auto; padding:40px 20px 64px; }
+  header h1 { margin:0; font-size:28px; letter-spacing:-.02em; }
+  header p { margin:6px 0 0; color:var(--muted); max-width:720px; }
+  .tag { display:inline-block; font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:2px 10px; margin:14px 6px 0 0; }
+  a { color:var(--text); }
+  .grid { display:grid; grid-template-columns: 1.6fr 1fr; gap:20px; margin-top:28px; }
+  @media (max-width: 860px) { .grid { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  #drop { border:1.5px dashed var(--line); border-radius:12px; padding:22px; text-align:center; cursor:pointer; transition:border-color .2s, background .2s; }
+  #drop.over, #drop:hover { border-color:var(--accent); background:#ff5a360d; }
+  #drop strong { display:block; font-size:16px; }
+  #drop span { color:var(--muted); font-size:13px; }
+  .samples { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+  .samples button { flex:1 1 120px; background:none; border:1px solid var(--line); border-radius:10px; padding:0; overflow:hidden; cursor:pointer; color:var(--muted); font-size:12px; }
+  .samples button:hover { border-color:var(--accent); }
+  .samples img { display:block; width:100%; height:70px; object-fit:cover; }
+  .samples button span { display:block; padding:4px 6px; }
+  .stage { position:relative; margin-top:16px; border-radius:12px; overflow:hidden; background:#07090b; min-height:240px; display:grid; place-items:center; }
+  .stage canvas { max-width:100%; height:auto; display:block; }
+  .stage .empty { color:var(--muted); font-size:14px; padding:40px; text-align:center; }
+  .scan::after { content:""; position:absolute; left:0; right:0; height:2px; background:linear-gradient(90deg,transparent,var(--accent),transparent); animation:scan 1.1s linear infinite; }
+  @keyframes scan { from { top:0 } to { top:100% } }
+  @media (prefers-reduced-motion: reduce) { .scan::after { animation:none; display:none; } }
+  .frames { display:flex; gap:6px; margin-top:12px; overflow-x:auto; padding-bottom:4px; }
+  .frames canvas { height:54px; border-radius:6px; border:2px solid transparent; cursor:pointer; flex:none; }
+  .frames canvas.hit { border-color:var(--accent); }
+  .frames canvas.sel { outline:2px solid var(--text); }
+  .stats { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .stat { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .stat b { display:block; font-size:22px; font-variant-numeric:tabular-nums; }
+  .stat small { color:var(--muted); }
+  .verdict { margin:0 0 14px; padding:12px 14px; border-radius:10px; border:1px solid var(--line); font-weight:600; }
+  .verdict.fire { border-color:var(--accent); color:#ffb3a1; background:#ff5a3612; }
+  .verdict.clear { border-color:#2b5a45; color:#9be7c4; background:#3ecf8e10; }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:14px; }
+  td, th { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  label.conf { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:13px; margin-top:14px; }
+  label.conf input { flex:1; accent-color:var(--accent); }
+  label.conf select { flex:1; background:#0b0d10; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:5px; }
+  .note { color:var(--muted); font-size:12.5px; margin-top:14px; }
+  .err { color:#ff8f7a; font-size:13px; margin-top:10px; min-height:1em; }
+  footer { margin-top:36px; color:var(--muted); font-size:13px; display:flex; gap:16px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Fire-Vision</h1>
+    <p>Drop in a photo or a short clip and a YOLOv8n detector marks fire and smoke. It was fine-tuned on the D-Fire wildfire dataset and runs on ONNX Runtime on a CPU serverless function, with no GPU and no PyTorch at serve time.</p>
+    <span class="tag">YOLOv8n → ONNX</span><span class="tag">FastAPI</span><span class="tag">NumPy pre/post-processing</span><span class="tag">Alert debounce: 3 positive frames</span><span class="tag">SMS alerts off in this demo</span>
+  </header>
+
+  <div class="grid">
+    <section class="panel">
+      <div id="drop" tabindex="0" role="button" aria-label="Upload an image or video">
+        <strong>Upload an image or a short clip</strong>
+        <span>JPG / PNG / WebP, or MP4 / WebM up to 30 s (12 frames are sampled in your browser)</span>
+        <input id="file" type="file" accept="image/*,video/*" hidden />
+      </div>
+      <div class="samples" id="samples">
+        <button data-src="samples/forest-burn.jpg"><img src="samples/forest-burn.jpg" alt="" /><span>Forest underburn</span></button>
+        <button data-src="samples/flame-front.jpg"><img src="samples/flame-front.jpg" alt="" /><span>Flame front</span></button>
+        <button data-src="samples/smoke-line.jpg"><img src="samples/smoke-line.jpg" alt="" /><span>Smoke + fire line</span></button>
+        <button data-src="samples/forest-burn-pan.mp4"><img src="samples/forest-burn.jpg" alt="" /><span>4 s clip</span></button>
+      </div>
+      <label class="conf">Model <select id="model"><option value="dfire">fire + smoke (D-Fire fine-tune)</option><option value="obb-v1">original OBB fire model</option></select></label>
+      <label class="conf">Confidence ≥ <output id="confv">0.25</output><input id="conf" type="range" min="0.05" max="0.9" step="0.05" value="0.25" /></label>
+      <div class="stage" id="stage"><div class="empty">Pick a sample or upload your own file.</div></div>
+      <div class="frames" id="frames"></div>
+      <div class="err" id="err"></div>
+    </section>
+
+    <aside class="panel">
+      <div class="verdict" id="verdict">Waiting for input</div>
+      <div class="stats">
+        <div class="stat"><b id="sDet">–</b><small>fire / smoke boxes</small></div>
+        <div class="stat"><b id="sConf">–</b><small>top confidence</small></div>
+        <div class="stat"><b id="sInf">–</b><small>model inference (server)</small></div>
+        <div class="stat"><b id="sRtt">–</b><small>round trip (your browser)</small></div>
+      </div>
+      <table id="tbl"><thead><tr><th>#</th><th>class</th><th>conf</th><th>size (px)</th></tr></thead><tbody></tbody></table>
+      <p class="note" id="pix"></p>
+      <p class="note">Clips are sampled in your browser (12 frames), and each frame goes to <code>/api/detect</code>. An alert would fire after 3 consecutive positive frames, which is the same rule as the server-side <code>/api/detect/video</code> endpoint. The colour-rule pixel ratios come from the original OpenCV pipeline, ported to NumPy, and are a cheap second signal. In the full app an alert sends a Twilio SMS and call; here it only reports "would alert".</p>
+    </aside>
+  </div>
+
+  <footer>
+    <a href="https://github.com/Anshul3977/Fire-Vision">GitHub</a>
+    <a href="/api/health">API health</a>
+    <a href="https://anshulpalarpwar.vercel.app">Portfolio</a>
+    <a href="/docs">API docs</a>
+    <span>Sample photos: U.S. Fish &amp; Wildlife Service, public domain (Wikimedia Commons). Training data: D-Fire (Venâncio et al., 2022).</span>
+  </footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const stage = $("stage"), framesEl = $("frames"), tbody = document.querySelector("#tbl tbody");
+let results = [], lastFile = null;
+
+$("conf").addEventListener("input", (e) => { $("confv").textContent = (+e.target.value).toFixed(2); });
+$("conf").addEventListener("change", () => { if (lastFile) handle(lastFile); });
+$("model").addEventListener("change", () => { if (lastFile) handle(lastFile); });
+$("drop").addEventListener("click", () => $("file").click());
+$("drop").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") $("file").click(); });
+$("file").addEventListener("change", (e) => e.target.files[0] && handle(e.target.files[0]));
+["dragover", "dragenter"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", (e) => e.dataTransfer.files[0] && handle(e.dataTransfer.files[0]));
+document.querySelectorAll("#samples button").forEach((b) => b.addEventListener("click", async () => {
+  const r = await fetch(b.dataset.src); const blob = await r.blob();
+  handle(new File([blob], b.dataset.src.split("/").pop(), { type: blob.type }));
+}));
+
+function toCanvas(src, w, h, maxSide = 1024) {
+  const s = Math.min(1, maxSide / Math.max(w, h));
+  const c = document.createElement("canvas"); c.width = Math.round(w * s); c.height = Math.round(h * s);
+  c.getContext("2d").drawImage(src, 0, 0, c.width, c.height); return c;
+}
+const blobOf = (c) => new Promise((r) => c.toBlob(r, "image/jpeg", 0.88));
+
+async function detect(canvas) {
+  const fd = new FormData(); fd.append("file", await blobOf(canvas), "frame.jpg");
+  const t0 = performance.now();
+  const r = await fetch(`/api/detect?conf=${$("conf").value}&model=${$("model").value}`, { method: "POST", body: fd });
+  const rtt = performance.now() - t0;
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+  return { ...(await r.json()), rtt, canvas };
+}
+
+function draw(res) {
+  const c = document.createElement("canvas"); c.width = res.canvas.width; c.height = res.canvas.height;
+  const g = c.getContext("2d"); g.drawImage(res.canvas, 0, 0);
+  const sx = c.width / res.width, sy = c.height / res.height;
+  g.lineWidth = Math.max(2, c.width / 320); g.font = `600 ${Math.max(12, c.width / 55)}px system-ui`;
+  res.detections.forEach((d) => {
+    const col = d.label === "smoke" ? "#8fb3d9" : "#ff5a36";
+    g.strokeStyle = col; g.beginPath();
+    d.polygon.forEach(([x, y], i) => (i ? g.lineTo(x * sx, y * sy) : g.moveTo(x * sx, y * sy))); g.closePath(); g.stroke();
+    const [x, y] = d.polygon.reduce((a, p) => (p[1] < a[1] ? p : a));
+    const label = `${d.label} ${(d.confidence * 100).toFixed(0)}%`; const tw = g.measureText(label).width + 10;
+    g.fillStyle = col; g.fillRect(x * sx, y * sy - 22, tw, 20); g.fillStyle = "#fff"; g.fillText(label, x * sx + 5, y * sy - 7);
+  });
+  return c;
+}
+
+function show(i) {
+  const res = results[i]; if (!res) return;
+  stage.replaceChildren(draw(res));
+  [...framesEl.children].forEach((t, j) => t.classList.toggle("sel", j === i));
+  tbody.replaceChildren(...res.detections.map((d, k) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${k + 1}</td><td>${d.label}</td><td>${d.confidence.toFixed(2)}</td><td>${d.w.toFixed(0)}×${d.h.toFixed(0)}</td>`; return tr;
+  }));
+  $("pix").textContent = `Colour rules on this frame: fire pixels ${(res.fire_pixel_ratio * 100).toFixed(2)}%, smoke-like pixels ${(res.smoke_pixel_ratio * 100).toFixed(1)}%. Server timings: pre ${res.timings.preprocess_ms} ms, model ${res.timings.inference_ms} ms, NMS ${res.timings.postprocess_ms} ms.`;
+}
+
+function summarise() {
+  const all = results.flatMap((r) => r.detections), hits = results.filter((r) => r.detections.length).length;
+  let streak = 0, best = 0; results.forEach((r) => { streak = r.detections.length ? streak + 1 : 0; best = Math.max(best, streak); });
+  const kinds = [...new Set(all.map((d) => d.label))].sort().join(" + ") || "fire";
+  const alert = results.length > 1 ? best >= 3 : all.length > 0;
+  const v = $("verdict");
+  v.className = "verdict " + (all.length ? "fire" : "clear");
+  v.textContent = all.length
+    ? (results.length > 1 ? `${kinds} in ${hits} of ${results.length} frames. ${alert ? "Would alert." : "Not enough consecutive frames to alert."}` : `${kinds} detected. Would alert.`)
+    : (results.length > 1 ? `No fire or smoke in ${results.length} frames` : "No fire or smoke detected");
+  $("sDet").textContent = results.length > 1 ? `${all.length} / ${results.length}f` : all.length;
+  $("sConf").textContent = all.length ? Math.max(...all.map((d) => d.confidence)).toFixed(2) : "–";
+  const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+  $("sInf").textContent = `${med(results.map((r) => r.timings.inference_ms)).toFixed(0)} ms`;
+  $("sRtt").textContent = `${med(results.map((r) => r.rtt)).toFixed(0)} ms`;
+}
+
+async function videoFrames(file, n = 12) {
+  const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.preload = "auto";
+  v.src = URL.createObjectURL(file);
+  await new Promise((ok, bad) => { v.onloadeddata = ok; v.onerror = () => bad(new Error("Your browser could not decode that video.")); });
+  const dur = Math.min(v.duration || 0, 30), out = [];
+  for (let i = 0; i < n; i++) {
+    v.currentTime = dur * (i + 0.5) / n;
+    await new Promise((r) => (v.onseeked = r));
+    out.push(toCanvas(v, v.videoWidth, v.videoHeight, 960));
+  }
+  URL.revokeObjectURL(v.src); return out;
+}
+
+async function handle(file) {
+  lastFile = file; $("err").textContent = ""; results = []; framesEl.replaceChildren(); tbody.replaceChildren();
+  $("verdict").className = "verdict"; $("verdict").textContent = "Running detector…";
+  stage.classList.add("scan");
+  try {
+    let canvases;
+    if (file.type.startsWith("video/")) canvases = await videoFrames(file);
+    else { const bmp = await createImageBitmap(file); canvases = [toCanvas(bmp, bmp.width, bmp.height)]; }
+    stage.replaceChildren(canvases[0]);
+    for (let i = 0; i < canvases.length; i++) {
+      const res = await detect(canvases[i]); results.push(res);
+      if (canvases.length > 1) {
+        const t = draw(res); t.classList.toggle("hit", res.detections.length > 0);
+        t.title = `frame ${i + 1}: ${res.detections.length} box(es)`; t.onclick = () => show(i); framesEl.append(t);
+      }
+      show(i); summarise();
+    }
+  } catch (e) { $("err").textContent = e.message; $("verdict").textContent = "Something went wrong"; }
+  finally { stage.classList.remove("scan"); }
+}
+</script>
+</body>
+</html>

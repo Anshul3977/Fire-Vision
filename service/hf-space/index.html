@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fire-Vision in your browser</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+<style>
+  :root { color-scheme: dark; --bg:#0b0d10; --line:#232a33; --fg:#e8ecf1; --muted:#8b96a5; --accent:#ff5a36; }
+  * { box-sizing:border-box; } body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:980px; margin:0 auto; padding:28px 18px 48px; } h1 { font-size:24px; margin:0 0 4px; } p { color:var(--muted); margin:0 0 14px; } a { color:#ffb3a1; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:12px 0; }
+  .btn { background:#161b21; border:1px solid var(--line); color:var(--fg); padding:8px 14px; border-radius:8px; cursor:pointer; font:inherit; } .btn:hover { border-color:var(--accent); } .btn:disabled { opacity:.5; }
+  input[type=file] { display:none; }
+  .stage { background:#07090b; border:1px solid var(--line); border-radius:10px; min-height:240px; display:grid; place-items:center; overflow:hidden; } .stage canvas { max-width:100%; display:block; }
+  .verdict { margin-top:12px; padding:10px 14px; border-radius:10px; border:1px solid var(--line); font-weight:600; } .verdict.fire { border-color:var(--accent); color:#ffb3a1; } .verdict.clear { border-color:#2b5a45; color:#9be7c4; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; } .chip { border:1px solid var(--line); border-radius:999px; padding:3px 10px; font-size:13px; color:var(--muted); } .chip b { color:var(--fg); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Fire-Vision: fire and smoke detection in your browser</h1>
+  <p>A YOLOv8n model fine-tuned on the D-Fire wildfire dataset runs on your own CPU through ONNX Runtime Web. Server version: <a href="https://fire-vision-anshul.vercel.app" target="_blank">FastAPI demo</a>. Source: <a href="https://github.com/Anshul3977/Fire-Vision" target="_blank">GitHub</a>.</p>
+  <div class="row">
+    <label class="btn">Photo or clip<input id="file" type="file" accept="image/*,video/*" /></label>
+    <button class="btn" id="s1">Flame front</button><button class="btn" id="s2">Forest underburn</button><button class="btn" id="s3">Sample clip</button>
+    <span id="status" style="color:var(--muted)">Loading model…</span>
+  </div>
+  <div class="stage" id="stage"><span style="color:var(--muted)">The 12 MB model downloads once, then runs locally.</span></div>
+  <div class="verdict" id="verdict">Waiting for input</div>
+  <div class="chips" id="chips"></div>
+</main>
+<script type="module">
+import { loadModel, detect } from "./yolo-web.js";
+const $ = (id) => document.getElementById(id);
+const bs = ["s1", "s2", "s3"].map($); bs.forEach((b) => b.disabled = true);
+let model;
+try { model = await loadModel("fire_smoke_dfire.onnx", { 0: "smoke", 1: "fire" }, { size: 416 }); $("status").textContent = `Model ready in ${(model.loadMs / 1000).toFixed(1)} s`; bs.forEach((b) => b.disabled = false); }
+catch (e) { $("status").textContent = "Could not load the model: " + e.message; }
+const chips = (p) => $("chips").replaceChildren(...p.map(([k, v]) => Object.assign(document.createElement("span"), { className: "chip", innerHTML: `${k} <b>${v}</b>` })));
+function paint(src, w, h, dets) {
+  const c = document.createElement("canvas"); c.width = w; c.height = h; const g = c.getContext("2d"); g.drawImage(src, 0, 0, w, h);
+  const lw = Math.max(2, w / 320); g.lineWidth = lw; g.font = `600 ${Math.max(12, w / 55)}px system-ui`;
+  for (const d of dets) { const { x1, y1, x2, y2 } = d.box, col = d.label === "smoke" ? "#8fb3d9" : "#ff5a36";
+    g.strokeStyle = g.fillStyle = col; g.strokeRect(x1, y1, x2 - x1, y2 - y1); const t = `${d.label} ${(d.confidence * 100) | 0}%`, tw = g.measureText(t).width + 10;
+    g.fillRect(x1, Math.max(0, y1 - 22), tw, 20); g.fillStyle = "#fff"; g.fillText(t, x1 + 5, Math.max(15, y1 - 7)); }
+  return c;
+}
+function verdict(hit, text) { $("verdict").className = "verdict " + (hit ? "fire" : "clear"); $("verdict").textContent = text; }
+async function runImage(blob) {
+  const bmp = await createImageBitmap(blob); const r = await detect(model, bmp, bmp.width, bmp.height);
+  $("stage").replaceChildren(paint(bmp, bmp.width, bmp.height, r.detections));
+  const kinds = [...new Set(r.detections.map((d) => d.label))].join(" + ");
+  verdict(r.detections.length > 0, r.detections.length ? `${kinds} detected. Would alert.` : "No fire or smoke detected");
+  chips([["boxes", r.detections.length], ["inference (your CPU)", `${r.timings.inference_ms} ms`]]);
+}
+async function runVideo(blob) {
+  const v = document.createElement("video"); v.muted = true; v.src = URL.createObjectURL(blob); await new Promise((r) => v.onloadeddata = r);
+  let streak = 0, alertAt = null, pos = 0, n = 0; const inf = [];
+  for (let t = 0; t < Math.min(v.duration, 30); t += 0.25) {
+    v.currentTime = t; await new Promise((r) => v.onseeked = r);
+    const r = await detect(model, v, v.videoWidth, v.videoHeight); inf.push(r.timings.inference_ms); n++;
+    const hit = r.detections.length > 0; pos += hit; streak = hit ? streak + 1 : 0; if (streak >= 3 && alertAt === null) alertAt = t;
+    $("stage").replaceChildren(paint(v, v.videoWidth, v.videoHeight, r.detections));
+    verdict(alertAt !== null, alertAt !== null ? `Would alert at ${alertAt.toFixed(2)} s (3 consecutive positive frames)` : `Scanning… ${pos} positive of ${n} frames`);
+    chips([["t", `${t.toFixed(2)} s`], ["positive frames", `${pos} / ${n}`], ["inference", `${(inf.reduce((a, b) => a + b) / inf.length).toFixed(0)} ms avg`]]);
+  }
+}
+$("file").onchange = (e) => { const f = e.target.files[0]; if (f) (f.type.startsWith("video/") ? runVideo : runImage)(f); };
+const get = async (u) => (await fetch(u)).blob();
+$("s1").onclick = async () => runImage(await get("flame-front.jpg"));
+$("s2").onclick = async () => runImage(await get("forest-burn.jpg"));
+$("s3").onclick = async () => runVideo(await get("forest-burn-pan.mp4"));
+</script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+{
+  "env": {
+    "cpu": "x86_64",
+    "cores": 8,
+    "python": "3.13.5",
+    "onnxruntime": "1.32.0",
+    "iters": 200,
+    "warmup": 20,
+    "image": "forest-burn.jpg",
+    "note": "Measured on a shared 8 vCPU Intel Xeon VM; PyTorch rows are forward-only."
+  },
+  "results": [
+    {
+      "model": "fire_obb.onnx",
+      "backend": "onnxruntime",
+      "imgsz": 640,
+      "threads": 1,
+      "forward": {
+        "p50_ms": 72.57,
+        "p95_ms": 90.14,
+        "mean_ms": 75.12,
+        "fps": 13.3
+      },
+      "pipeline": {
+        "p50_ms": 84.27,
+        "p95_ms": 104.94,
+        "mean_ms": 86.33,
+        "fps": 11.6
+      }
+    },
+    {
+      "model": "fire_obb.onnx",
+      "backend": "onnxruntime",
+      "imgsz": 640,
+      "threads": 4,
+      "forward": {
+        "p50_ms": 42.05,
+        "p95_ms": 44.66,
+        "mean_ms": 40.92,
+        "fps": 24.4
+      },
+      "pipeline": {
+        "p50_ms": 44.55,
+        "p95_ms": 53.06,
+        "mean_ms": 43.7,
+        "fps": 22.9
+      }
+    },
+    {
+      "model": "fire_smoke_dfire.onnx",
+      "backend": "onnxruntime",
+      "imgsz": 416,
+      "threads": 1,
+      "forward": {
+        "p50_ms": 29.86,
+        "p95_ms": 34.64,
+        "mean_ms": 30.49,
+        "fps": 32.8
+      },
+      "pipeline": {
+        "p50_ms": 35.03,
+        "p95_ms": 56.4,
+        "mean_ms": 38.94,
+        "fps": 25.7
+      }
+    },
+    {
+      "model": "fire_smoke_dfire.onnx",
+      "backend": "onnxruntime",
+      "imgsz": 416,
+      "threads": 4,
+      "forward": {
+        "p50_ms": 15.65,
+        "p95_ms": 16.84,
+        "mean_ms": 15.05,
+        "fps": 66.4
+      },
+      "pipeline": {
+        "p50_ms": 17.96,
+        "p95_ms": 21.64,
+        "mean_ms": 18.52,
+        "fps": 54.0
+      }
+    },
+    {
+      "model": "fire_smoke_dfire.pt",
+      "backend": "pytorch 2.15.0+cpu",
+      "threads": 1,
+      "imgsz": 416,
+      "forward": {
+        "p50_ms": 42.7,
+        "p95_ms": 65.24,
+        "mean_ms": 48.01,
+        "fps": 20.8
+      }
+    },
+    {
+      "model": "fire_smoke_dfire.pt",
+      "backend": "pytorch 2.15.0+cpu",
+      "threads": 4,
+      "imgsz": 416,
+      "forward": {
+        "p50_ms": 23.46,
+        "p95_ms": 29.48,
+        "mean_ms": 24.21,
+        "fps": 41.3
+      }
+    },
+    {
+      "model": "yoloNano.pt",
+      "backend": "pytorch 2.15.0+cpu",
+      "threads": 1,
+      "imgsz": 640,
+      "forward": {
+        "p50_ms": 91.84,
+        "p95_ms": 135.69,
+        "mean_ms": 99.71,
+        "fps": 10.0
+      }
+    },
+    {
+      "model": "yoloNano.pt",
+      "backend": "pytorch 2.15.0+cpu",
+      "threads": 4,
+      "imgsz": 640,
+      "forward": {
+        "p50_ms": 48.68,
+        "p95_ms": 55.74,
+        "mean_ms": 48.79,
+        "fps": 20.5
+      }
+    }
+  ]
+}
